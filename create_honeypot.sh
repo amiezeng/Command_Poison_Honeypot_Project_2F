@@ -15,15 +15,11 @@ echo "Configuration: $CONFIG"
 # Create container
 lxc launch ubuntu:24.04 "$CONTAINER"
 
-sleep 5
-
 # Update packages
 lxc exec "$CONTAINER" -- apt update -y
 
 # Install SSH
 lxc exec "$CONTAINER" -- apt install -y openssh-server
-
-sleep 3
 
 # Basic SSH honeypot configuration
 lxc exec "$CONTAINER" -- bash -c \
