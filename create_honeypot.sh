@@ -1,42 +1,32 @@
 #!/bin/bash
+# one-time setup: launch a container, install the shared packages, save a snapshot.
+# recycling restores that snapshot instead of building ubuntu again.
 
-if [ "$#" -ne 2 ]
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+if [ "$#" -ne 1 ]
 then
-    echo "usage: $0 <name> <config>"
+    echo "usage: $0 <name>"
     exit 1
 fi
 
 CONTAINER="$1"
-CONFIG="$2"
+SNAPSHOT="clean"
 
-echo "Creating honeypot '$CONTAINER'"
-echo "Configuration: $CONFIG"
+echo "creating honeypot $CONTAINER"
 
-# Create container
 lxc launch ubuntu:24.04 "$CONTAINER"
 
-# Update packages
-lxc exec "$CONTAINER" -- apt update -y
+# apt cannot run until first-boot setup releases its lock
+lxc exec "$CONTAINER" -- cloud-init status --wait
 
-# Install SSH
-lxc exec "$CONTAINER" -- apt install -y openssh-server
+cat ./common_setup.sh | lxc exec "$CONTAINER" -- bash -s
 
-# Basic SSH honeypot configuration
-lxc exec "$CONTAINER" -- bash -c \
-    "echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config"
+# a stopped snapshot restores to a clean stopped container
+lxc stop "$CONTAINER"
+lxc snapshot "$CONTAINER" "$SNAPSHOT"
 
-lxc exec "$CONTAINER" -- bash -c \
-    "echo 'PubkeyAuthentication no' >> /etc/ssh/sshd_config"
-
-lxc exec "$CONTAINER" -- bash -c \
-    "echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config"
-
-# Restart SSH
-lxc exec "$CONTAINER" -- systemctl restart ssh
-
-# Display container information
-echo
-echo "Honeypot '$CONTAINER' is running."
-echo "Configuration: $CONFIG"
-
-lxc list "$CONTAINER"
+echo "snapshot $SNAPSHOT saved for $CONTAINER"
+echo "start a cycle with ./recycling_script.sh $CONTAINER <process>"
