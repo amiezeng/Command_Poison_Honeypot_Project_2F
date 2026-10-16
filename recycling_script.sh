@@ -116,6 +116,10 @@ then
     exit 1
 fi
 
+# monitor.sh reads this so each ssh event is labeled with the configuration
+mkdir -p "$HOME/data/live/$CONTAINER"
+printf '%s\n' "$CONFIG" > "$HOME/data/live/$CONTAINER/config"
+
 echo "honeypot $CONTAINER is running"
 echo "configuration: $CONFIG"
 echo "recycle took $(( $(date +%s) - started )) seconds"
