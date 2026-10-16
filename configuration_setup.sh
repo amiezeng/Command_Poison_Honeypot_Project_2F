@@ -21,5 +21,5 @@ case "$CONFIG" in
         ;;
 esac
 
-# config-specific changes go here.
+# recycling_script.sh already copied this cycle's art to /etc/banner-art
 echo "applied configuration $CONFIG"

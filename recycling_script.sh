@@ -74,6 +74,28 @@ then
     exit 1
 fi
 
+# config 1 is empty. 2 through 5 are the four drawings.
+banner=$(mktemp)
+case "$CONFIG" in
+    1)
+        : > "$banner"
+        ;;
+    2)
+        cp ./ascii/25.txt "$banner"
+        ;;
+    3)
+        cp ./ascii/50.txt "$banner"
+        ;;
+    4)
+        cp ./ascii/75.txt "$banner"
+        ;;
+    5)
+        cp ./ascii/100.txt "$banner"
+        ;;
+esac
+lxc file push --mode 0644 "$banner" "$CONTAINER/etc/banner-art"
+rm -f "$banner"
+
 cat ./configuration_setup.sh | lxc exec "$CONTAINER" -- bash -s "$CONFIG"
 
 # configuration setup must finish with ssh listening
