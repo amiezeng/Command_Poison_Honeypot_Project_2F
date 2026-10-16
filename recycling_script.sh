@@ -26,12 +26,31 @@ started=$(date +%s)
 
 sudo screen -S "$PROCESS" -X quit 2>/dev/null || true
 
-# restore only works when the container is stopped.
-# read the whole info output first. grep -q can close the pipe early.
-status=$(lxc info "$CONTAINER" | sed -n 's/^Status: //p')
-if [ "$status" = "RUNNING" ]
+# lxc info prints "Running", not "RUNNING".
+# restore fails if that check does not match.
+status=$(lxc info "$CONTAINER" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+if [ "$status" = "running" ]
 then
     lxc stop "$CONTAINER" --force
+fi
+
+# wait until stop has finished
+stopped=0
+for _ in $(seq 1 30)
+do
+    status=$(lxc info "$CONTAINER" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+    if [ "$status" = "stopped" ]
+    then
+        stopped=1
+        break
+    fi
+    sleep 0.5
+done
+
+if [ "$stopped" -ne 1 ]
+then
+    echo "container $CONTAINER did not stop"
+    exit 1
 fi
 
 lxc restore "$CONTAINER" "$SNAPSHOT"
