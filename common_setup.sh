@@ -7,6 +7,9 @@ set -euo pipefail
 apt update -y
 apt install -y openssh-server
 
+# the image sets password auth to no in this file, and ssh reads it first
+printf '%s\n' 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
+
 # same ssh settings on every honeypot.
 # bash reads banner.bashrc for non-interactive ssh, which is how bots run commands.
 printf '%s\n' \
