@@ -12,7 +12,7 @@ Command-output poisoning has a statistically significant effect on attacker beha
 - A Slack bot is used to provide automated notifications and updates on completed honeypot sessions.
 - Real-time data for each honeypot container is stored in ~/data/live/<container>/.
 - Completed sessions are archived in ~/data/logs/ for future analysis.
-Archived records include:
+### Archived records include:
 - SSH man-in-the-middle (MITM) logs
 - Session statistics
 - Attacker disconnect or leave reasons
