@@ -261,7 +261,7 @@ watch_session() {
                         note_attacker_ip "$line"
                         if [ -z "$SESSION_CONNECTED_AT" ]
                         then
-                            SESSION_CONNECTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
+                            SESSION_CONNECTED_AT=$(date '+%Y-%m-%d %I:%M:%S %p %Z')
                             SESSION_START=$(date +%s)
                         fi
                         ;;
@@ -290,7 +290,7 @@ watch_session() {
                         start_ts=$now
                         if [ -z "$SESSION_CONNECTED_AT" ]
                         then
-                            SESSION_CONNECTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
+                            SESSION_CONNECTED_AT=$(date '+%Y-%m-%d %I:%M:%S %p %Z')
                             SESSION_START=$now
                         fi
                         echo "session started" >&2
@@ -405,7 +405,7 @@ run_one() {
         echo "waiting for attacker on $name"
         watch_session
         reason=$SESSION_REASON
-        left_at=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
+        left_at=$(date '+%Y-%m-%d %I:%M:%S %p %Z')
         echo "session ended: $reason"
         length=0
         if [ "$SESSION_START" -gt 0 ]
