@@ -137,15 +137,21 @@ session_saved() {
 
 archive_session() {
     local reason="$1"
-    local stamp dest d
+    local label stamp dest d
     if ! session_saved
     then
         return 0
     fi
+    case "$reason" in
+        logout) label="attacker left" ;;
+        idle) label="idle timeout" ;;
+        timeout) label="session timeout" ;;
+        *) label="$reason" ;;
+    esac
     stamp=$(date -u +%Y%m%dT%H%M%SZ)
     dest="$DATA/logs/${stamp}-${name}"
     mkdir -p "$dest"
-    printf '%s\n' "$reason" > "$dest/leave_reason"
+    printf '%s\n' "$label" > "$dest/leave_reason"
     if [ -f "$live/config" ]
     then
         cp "$live/config" "$dest/config"
@@ -166,7 +172,7 @@ archive_session() {
             cp -a "$live/$d"/. "$dest/$d/"
         fi
     done
-    echo "saved $dest ($reason)"
+    echo "saved $dest ($label)"
 }
 
 clear_session_files() {
@@ -394,9 +400,9 @@ run_one() {
             length=$(( $(date +%s) - SESSION_START ))
         fi
         case "$reason" in
-            logout) why=exited ;;
-            idle) why=idle ;;
-            timeout) why="kicked at 5 minutes" ;;
+            logout) why="attacker left" ;;
+            idle) why="idle timeout" ;;
+            timeout) why="session timeout" ;;
             *) why=$reason ;;
         esac
         first=none
@@ -448,7 +454,7 @@ start_all() {
     do
         [ -z "$name" ] && continue
         [ "$name" = "name" ] && continue
-        screen_do -dmS "$name" bash -c "cd '$root' && exec ./lifecycle.sh '$name'"
+        screen_do -dmS "$name" bash -c "cd '$root' && exec ./run-one.sh '$name'"
         echo "started $name"
     done < ./honeypots.csv
 }
