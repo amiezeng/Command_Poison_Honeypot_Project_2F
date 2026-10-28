@@ -236,13 +236,14 @@ mitm_listening() {
     return 1
 }
 
-# sets SESSION_REASON, SESSION_START, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
+# sets SESSION_REASON, SESSION_START, SESSION_CONNECTED_AT, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
 watch_session() {
     local logfile="$live/mitm.log"
     local seen=0 total now line event
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
+    SESSION_CONNECTED_AT=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
@@ -256,7 +257,15 @@ watch_session() {
             while IFS= read -r line
             do
                 case "$line" in
-                    *"Attacker connected:"*|*"Container locked to "*|*"trying to authenticate"*|*"[Auth] Attacker:"*|*"Auto Access] Attacker:"*)
+                    *"Attacker connected:"*)
+                        note_attacker_ip "$line"
+                        if [ -z "$SESSION_CONNECTED_AT" ]
+                        then
+                            SESSION_CONNECTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
+                            SESSION_START=$(date +%s)
+                        fi
+                        ;;
+                    *"Container locked to "*|*"trying to authenticate"*|*"[Auth] Attacker:"*|*"Auto Access] Attacker:"*)
                         note_attacker_ip "$line"
                         ;;
                     *"line from reader:"*|*"Noninteractive mode attacker command:"*)
@@ -279,9 +288,12 @@ watch_session() {
                     then
                         in_session=1
                         start_ts=$now
-                        SESSION_START=$now
+                        if [ -z "$SESSION_CONNECTED_AT" ]
+                        then
+                            SESSION_CONNECTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
+                            SESSION_START=$now
+                        fi
                         echo "session started" >&2
-                        slack "$name $PUBLIC_IP, config $(config_text): attacker entered from $ATTACKER_IP"
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
                     then
@@ -339,7 +351,7 @@ kick_attacker() {
 
 run_one() {
     local name="$1"
-    local live reason ip
+    local live reason ip left_at
     lookup "$name"
     live="$DATA/live/$name"
     mkdir -p "$live"
@@ -393,6 +405,7 @@ run_one() {
         echo "waiting for attacker on $name"
         watch_session
         reason=$SESSION_REASON
+        left_at=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')
         echo "session ended: $reason"
         length=0
         if [ "$SESSION_START" -gt 0 ]
@@ -413,10 +426,12 @@ run_one() {
         case "$reason" in
             logout|idle|timeout)
                 write_session_stats "$length" "$why"
-                slack "$name $PUBLIC_IP, config $(config_text): attacker left
-reason: $why
+                slack "$name $PUBLIC_IP, config $(config_text): attacker session
 from: $ATTACKER_IP
-session: ${length}s
+connected: $SESSION_CONNECTED_AT
+left: $left_at
+reason: $why
+duration: ${length}s
 commands: $SESSION_COMMANDS
 keystrokes: $SESSION_KEYSTROKES
 first command: $first"
