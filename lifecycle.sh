@@ -148,7 +148,7 @@ archive_session() {
         timeout) label="session timeout" ;;
         *) label="$reason" ;;
     esac
-    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    stamp=$(TZ=America/New_York date +%Y%m%dT%H%M%S)
     dest="$DATA/logs/${stamp}-${name}"
     mkdir -p "$dest"
     printf '%s\n' "$label" > "$dest/leave_reason"
@@ -236,13 +236,14 @@ mitm_listening() {
     return 1
 }
 
-# sets SESSION_REASON, SESSION_START, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
+# sets SESSION_REASON, SESSION_START, SESSION_CONNECTED, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
 watch_session() {
     local logfile="$live/mitm.log"
     local seen=0 total now line event
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
+    SESSION_CONNECTED=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
@@ -280,8 +281,8 @@ watch_session() {
                         in_session=1
                         start_ts=$now
                         SESSION_START=$now
+                        SESSION_CONNECTED=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
                         echo "session started" >&2
-                        slack "$name $PUBLIC_IP, config $(config_text): attacker entered from $ATTACKER_IP"
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
                     then
@@ -339,7 +340,7 @@ kick_attacker() {
 
 run_one() {
     local name="$1"
-    local live reason ip
+    local live reason ip length why first left
     lookup "$name"
     live="$DATA/live/$name"
     mkdir -p "$live"
@@ -410,16 +411,23 @@ run_one() {
         then
             first="${SESSION_FIRST_COMMAND}s"
         fi
+        left=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
         case "$reason" in
             logout|idle|timeout)
                 write_session_stats "$length" "$why"
-                slack "$name $PUBLIC_IP, config $(config_text): attacker left
-reason: $why
+                slack "------------------------------
+$name $PUBLIC_IP: attacker session
+------------------------------
+configuration: $(config_text)
 from: $ATTACKER_IP
-session: ${length}s
+connected: $SESSION_CONNECTED
+left: $left
+reason: $why
+duration: ${length}s
 commands: $SESSION_COMMANDS
 keystrokes: $SESSION_KEYSTROKES
-first command: $first"
+first command: $first
+------------------------------"
                 ;;
         esac
         case "$reason" in
