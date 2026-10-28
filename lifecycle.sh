@@ -530,19 +530,6 @@ run_one() {
         case "$reason" in
             logout|idle|timeout)
                 write_session_stats "$length" "$why"
-                slack "------------------------------
-$name $PUBLIC_IP: attacker session
-------------------------------
-configuration: $(config_text)
-from: $ATTACKER_IP
-connected: $SESSION_CONNECTED_AT
-left: $left_at
-reason: $why
-duration: ${length}s
-commands: $SESSION_COMMANDS
-keystrokes: $SESSION_KEYSTROKES
-first command: $first
-------------------------------"
                 ;;
         esac
         case "$reason" in
