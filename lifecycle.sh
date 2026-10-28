@@ -218,8 +218,18 @@ replace_js_string() {
 }
 
 start_mitm() {
+    local _
     : > "$live/mitm.log"
     screen_do -S "${name}-mitm" -X quit 2>/dev/null || true
+    # wait for the old node process to release the port before starting a new one
+    for _ in $(seq 1 20)
+    do
+        if ! ss -ltn "sport = :$MITM_PORT" | grep -q LISTEN
+        then
+            break
+        fi
+        sleep 0.5
+    done
     screen_do -dmS "${name}-mitm" bash -c "cd '$MITM_CONFIG_DIR' && node '$MITM_INDEX' '${name}.js' 2>&1 | tee -a '$live/mitm.log'"
 }
 
@@ -278,8 +288,18 @@ watch_session() {
                 event=$(classify_mitm_line "$line")
                 if [ "$event" = "logout" ]
                 then
-                    SESSION_REASON=logout
-                    return 0
+                    if [ "$in_session" -eq 1 ]
+                    then
+                        SESSION_REASON=logout
+                        return 0
+                    fi
+                    # closed before any lock or shell: nothing is dirty, keep listening
+                    SESSION_CONNECTED_AT=
+                    SESSION_START=0
+                    SESSION_COMMANDS=0
+                    SESSION_KEYSTROKES=0
+                    SESSION_FIRST_COMMAND=-1
+                    ATTACKER_IP=unknown
                 fi
                 if [ "$event" = "activity" ]
                 then
