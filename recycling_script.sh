@@ -126,9 +126,6 @@ case "$CONFIG" in
 esac
 lxc file push --mode 0644 "$banner" "$CONTAINER/etc/banner-art"
 rm -f "$banner"
- 
-# build the fake bank files
-cat ./honey_setup.sh | lxc exec "$CONTAINER" -- bash -s
 
 cat ./configuration_setup.sh | lxc exec "$CONTAINER" -- bash -s "$CONFIG"
  
