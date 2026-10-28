@@ -37,6 +37,44 @@ screen_do() {
     fi
 }
 
+slack() {
+    local text="$1"
+    if [ -z "${SLACK_WEBHOOK_URL:-}" ] && [ -f "$HOME/data/slack.env" ]
+    then
+        # shellcheck disable=SC1091
+        . "$HOME/data/slack.env"
+    fi
+    if [ -z "${SLACK_WEBHOOK_URL:-}" ]
+    then
+        return 0
+    fi
+    text=${text//$'\n'/\\n}
+    curl -sS -m 10 -X POST -H 'Content-type: application/json' \
+        --data "{\"text\":\"${text}\"}" \
+        "$SLACK_WEBHOOK_URL" >/dev/null || true
+}
+
+config_now() {
+    local config=unknown
+    if [ -f "$live/config" ]
+    then
+        config=$(tr -cd '0-9' < "$live/config")
+    fi
+    printf '%s\n' "$config"
+}
+
+# 1 is the empty control. 2 through 5 are the ascii drawings.
+config_text() {
+    case "$(config_now)" in
+        1) printf '%s\n' "1 (control, no ascii)" ;;
+        2) printf '%s\n' "2 (25% ascii)" ;;
+        3) printf '%s\n' "3 (50% ascii)" ;;
+        4) printf '%s\n' "4 (75% ascii)" ;;
+        5) printf '%s\n' "5 (100% ascii)" ;;
+        *) printf '%s\n' "unknown" ;;
+    esac
+}
+
 # logout ends the attack. activity means a shell is open or the attacker typed.
 classify_mitm_line() {
     case "$1" in
@@ -99,6 +137,10 @@ archive_session() {
     then
         cp "$live/mitm.log" "$dest/mitm.log"
     fi
+    if [ -f "$live/session.stats" ]
+    then
+        cp "$live/session.stats" "$dest/session.stats"
+    fi
     for d in logins login_attempts sessions
     do
         if [ -d "$live/$d" ] && [ -n "$(ls -A "$live/$d" 2>/dev/null)" ]
@@ -112,7 +154,7 @@ archive_session() {
 
 clear_session_files() {
     local d
-    rm -f "$live/mitm.log"
+    rm -f "$live/mitm.log" "$live/session.stats"
     for d in logins login_attempts sessions
     do
         rm -rf "$live/$d"
@@ -171,11 +213,17 @@ mitm_listening() {
     return 1
 }
 
-# returns logout, idle, or timeout on stdout
+# sets SESSION_REASON, SESSION_START, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
 watch_session() {
     local logfile="$live/mitm.log"
     local seen=0 total now line event
     local in_session=0 start_ts=0 last_ts=0
+    SESSION_REASON=
+    SESSION_START=0
+    SESSION_COMMANDS=0
+    SESSION_KEYSTROKES=0
+    SESSION_FIRST_COMMAND=-1
+    ATTACKER_IP=unknown
     : >> "$logfile"
     while true
     do
@@ -184,10 +232,23 @@ watch_session() {
         then
             while IFS= read -r line
             do
+                case "$line" in
+                    *"Container locked to "*)
+                        ATTACKER_IP=$(printf '%s\n' "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)
+                        ATTACKER_IP=${ATTACKER_IP%%$'\n'*}
+                        [ -n "$ATTACKER_IP" ] || ATTACKER_IP=unknown
+                        ;;
+                    *"line from reader:"*)
+                        SESSION_COMMANDS=$((SESSION_COMMANDS + 1))
+                        ;;
+                    *"Attacker Keystroke:"*)
+                        SESSION_KEYSTROKES=$((SESSION_KEYSTROKES + 1))
+                        ;;
+                esac
                 event=$(classify_mitm_line "$line")
                 if [ "$event" = "logout" ]
                 then
-                    printf '%s\n' logout
+                    SESSION_REASON=logout
                     return 0
                 fi
                 if [ "$event" = "activity" ]
@@ -197,7 +258,13 @@ watch_session() {
                     then
                         in_session=1
                         start_ts=$now
+                        SESSION_START=$now
                         echo "session started" >&2
+                        slack "$name $PUBLIC_IP, config $(config_text): attacker entered from $ATTACKER_IP"
+                    fi
+                    if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
+                    then
+                        SESSION_FIRST_COMMAND=$((now - start_ts))
                     fi
                     last_ts=$now
                 fi
@@ -209,17 +276,40 @@ watch_session() {
             now=$(date +%s)
             if [ $((now - start_ts)) -ge "$MAX_SESSION" ]
             then
-                printf '%s\n' timeout
+                SESSION_REASON=timeout
                 return 0
             fi
             if [ $((now - last_ts)) -ge "$IDLE_LIMIT" ]
             then
-                printf '%s\n' idle
+                SESSION_REASON=idle
                 return 0
             fi
         fi
         sleep 2
     done
+}
+
+# one record per attack, copied into the saved session folder
+write_session_stats() {
+    local length="$1"
+    local why="$2"
+    local first=none
+    if [ "$SESSION_FIRST_COMMAND" -ge 0 ]
+    then
+        first="${SESSION_FIRST_COMMAND}s"
+    fi
+    cat > "$live/session.stats" << EOF
+honeypot=$name
+public_ip=$PUBLIC_IP
+config=$(config_now)
+ascii=$(config_text)
+reason=$why
+attacker_ip=$ATTACKER_IP
+session_seconds=$length
+commands=$SESSION_COMMANDS
+keystrokes=$SESSION_KEYSTROKES
+seconds_to_first_command=$first
+EOF
 }
 
 kick_attacker() {
@@ -280,14 +370,43 @@ run_one() {
             continue
         fi
         echo "waiting for attacker on $name"
-        reason=$(watch_session)
+        watch_session
+        reason=$SESSION_REASON
         echo "session ended: $reason"
+        length=0
+        if [ "$SESSION_START" -gt 0 ]
+        then
+            length=$(( $(date +%s) - SESSION_START ))
+        fi
         case "$reason" in
-            logout)
+            logout) why=exited ;;
+            idle) why=idle ;;
+            timeout) why="kicked at 5 minutes" ;;
+            *) why=$reason ;;
+        esac
+        first=none
+        if [ "$SESSION_FIRST_COMMAND" -ge 0 ]
+        then
+            first="${SESSION_FIRST_COMMAND}s"
+        fi
+        case "$reason" in
+            logout|idle|timeout)
+                write_session_stats "$length" "$why"
+                slack "$name $PUBLIC_IP, config $(config_text): attacker left
+reason: $why
+from: $ATTACKER_IP
+session: ${length}s
+commands: $SESSION_COMMANDS
+keystrokes: $SESSION_KEYSTROKES
+first command: $first"
                 ;;
+        esac
+        case "$reason" in
             idle|timeout)
                 kick_attacker
                 sleep 1
+                ;;
+            logout)
                 ;;
             *)
                 echo "watcher stopped, recycling"
