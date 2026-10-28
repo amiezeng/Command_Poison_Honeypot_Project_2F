@@ -81,11 +81,28 @@ classify_mitm_line() {
         *"[Connection] Attacker closed connection"*|*"Attacker ended the shell"*|*"Honeypot ended shell"*|*"OpenSSH server ended connection"*|*"Client error"*)
             printf '%s\n' logout
             ;;
-        *"Container locked"*|*"Shell opened"*|*"shell opened"*|*compromised*|*"Attacker Keystroke"*|*"line from reader"*)
+        *"Container locked"*|*"Opened shell"*|*"Shell opened"*|*"shell opened"*|*"inside container"*|*"Noninteractive mode attacker command"*|*"Attacker Keystroke"*|*"line from reader"*)
             printf '%s\n' activity
             ;;
     esac
     return 0
+}
+
+# the attacker address is on the connect and auth lines, not the container address
+note_attacker_ip() {
+    local found
+    found=$(printf '%s\n' "$1" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)
+    found=${found%%$'\n'*}
+    if [ -z "$found" ] || [ "$found" = "0.0.0.0" ] || [ "$found" = "127.0.0.1" ] || [ "$found" = "172.20.0.1" ] || [ "$found" = "$PUBLIC_IP" ]
+    then
+        return 0
+    fi
+    case "$found" in
+        172.20.*)
+            return 0
+            ;;
+    esac
+    ATTACKER_IP=$found
 }
 
 lookup() {
@@ -233,12 +250,10 @@ watch_session() {
             while IFS= read -r line
             do
                 case "$line" in
-                    *"Container locked to "*)
-                        ATTACKER_IP=$(printf '%s\n' "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true)
-                        ATTACKER_IP=${ATTACKER_IP%%$'\n'*}
-                        [ -n "$ATTACKER_IP" ] || ATTACKER_IP=unknown
+                    *"Attacker connected:"*|*"Container locked to "*|*"trying to authenticate"*|*"[Auth] Attacker:"*|*"Auto Access] Attacker:"*)
+                        note_attacker_ip "$line"
                         ;;
-                    *"line from reader:"*)
+                    *"line from reader:"*|*"Noninteractive mode attacker command:"*)
                         SESSION_COMMANDS=$((SESSION_COMMANDS + 1))
                         ;;
                     *"Attacker Keystroke:"*)

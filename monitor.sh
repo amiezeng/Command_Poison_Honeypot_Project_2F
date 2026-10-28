@@ -1,9 +1,8 @@
 #!/bin/bash
 # watch one honeypot from the host.
 # writes ssh events to ~/data/live/<container>/monitor.log
-# posts logins, disconnects, and health changes to slack.
+# slack is sent by lifecycle.sh when an attacker enters or leaves.
 # usage: monitor.sh <container>
-# put SLACK_WEBHOOK_URL=https://hooks.slack.com/... in ~/data/slack.env
 
 set -euo pipefail
 
@@ -16,12 +15,6 @@ fi
 CONTAINER="$1"
 live_dir="$HOME/data/live/$CONTAINER"
 mkdir -p "$live_dir"
-
-if [ -z "${SLACK_WEBHOOK_URL:-}" ] && [ -f "$HOME/data/slack.env" ]
-then
-    # shellcheck disable=SC1091
-    . "$HOME/data/slack.env"
-fi
 
 config=unknown
 if [ -f "$live_dir/config" ]
@@ -40,17 +33,6 @@ log_event() {
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     printf '%s container=%s config=%s event=%s %s\n' \
         "$now" "$CONTAINER" "$config" "$event" "$extra" >> "$live_dir/monitor.log"
-}
-
-slack() {
-    local text="$1"
-    if [ -z "${SLACK_WEBHOOK_URL:-}" ]
-    then
-        return 0
-    fi
-    curl -sS -m 10 -X POST -H 'Content-type: application/json' \
-        --data "{\"text\":\"${text}\"}" \
-        "$SLACK_WEBHOOK_URL" >/dev/null || true
 }
 
 # event, user, ip, and port are set for the caller
@@ -104,17 +86,9 @@ record_ssh() {
     local extra
     extra="user=$user ip=$ip port=$port"
     log_event "$event" "$extra"
-    case "$event" in
-        login_success)
-            slack "$CONTAINER config $config: $user logged in from $ip"
-            ;;
-        disconnect)
-            slack "$CONTAINER config $config: $user disconnected from $ip"
-            ;;
-    esac
 }
 
-# slack only when health changes, so a one-minute cron does not repeat itself
+# record health changes in the local log
 set_health() {
     local now="$1"
     local prev=""
@@ -132,20 +106,16 @@ set_health() {
             if [ -n "$prev" ]
             then
                 log_event health_up ""
-                slack "$CONTAINER config $config: honeypot is back up"
             fi
             ;;
         down)
             log_event container_down ""
-            slack "$CONTAINER: container is down"
             ;;
         ssh_down)
             log_event ssh_down ""
-            slack "$CONTAINER config $config: ssh is not listening"
             ;;
         journal_down)
             log_event journal_down ""
-            slack "$CONTAINER config $config: could not read ssh logs"
             ;;
     esac
 }
