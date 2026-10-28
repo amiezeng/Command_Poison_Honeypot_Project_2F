@@ -135,6 +135,81 @@ session_saved() {
     return 1
 }
 
+csv_field() {
+    local value="${1//\"/\"\"}"
+    printf '"%s"' "$value"
+}
+
+stats_value() {
+    local key="$1"
+    local stats_file="$2"
+    awk -F= -v key="$key" '
+        $1 == key {
+            sub(/^[^=]*=/, "")
+            print
+            exit
+        }
+    ' "$stats_file"
+}
+
+append_session_csv() {
+    local dest="$1"
+    local stats_file="$dest/session.stats"
+    local csv="$DATA/${name}.lifecycle.csv"
+    local session_id started_at ended_at honeypot public_ip config ascii reason
+    local attacker_ip session_seconds commands keystrokes first_command
+
+    [ -f "$stats_file" ] || return 0
+    session_id=${dest##*/}
+    started_at=$(stats_value started_at "$stats_file")
+    ended_at=$(stats_value ended_at "$stats_file")
+    # Older archived stats do not include timestamps and cannot form a full row.
+    [ -n "$started_at" ] && [ -n "$ended_at" ] || return 0
+
+    if [ -s "$csv" ] && awk -F, -v id="$session_id" '
+        NR > 1 && ($1 == id || $1 == "\"" id "\"") { found = 1 }
+        END { exit !found }
+    ' "$csv"
+    then
+        return 0
+    fi
+
+    if [ ! -s "$csv" ]
+    then
+        printf '%s\n' 'session_id,honeypot,started_at,ended_at,session_status,public_ip,config,ascii,reason,attacker_ip,session_seconds,commands,keystrokes,seconds_to_first_command' > "$csv"
+    fi
+
+    honeypot=$(stats_value honeypot "$stats_file")
+    public_ip=$(stats_value public_ip "$stats_file")
+    config=$(stats_value config "$stats_file")
+    ascii=$(stats_value ascii "$stats_file")
+    reason=$(stats_value reason "$stats_file")
+    attacker_ip=$(stats_value attacker_ip "$stats_file")
+    session_seconds=$(stats_value session_seconds "$stats_file")
+    commands=$(stats_value commands "$stats_file")
+    keystrokes=$(stats_value keystrokes "$stats_file")
+    first_command=$(stats_value seconds_to_first_command "$stats_file")
+    first_command=${first_command%s}
+    [ "$first_command" != none ] || first_command=
+
+    {
+        csv_field "$session_id"; printf ','
+        csv_field "$honeypot"; printf ','
+        csv_field "$started_at"; printf ','
+        csv_field "$ended_at"; printf ','
+        csv_field completed; printf ','
+        csv_field "$public_ip"; printf ','
+        csv_field "$config"; printf ','
+        csv_field "$ascii"; printf ','
+        csv_field "$reason"; printf ','
+        csv_field "$attacker_ip"; printf ','
+        csv_field "$session_seconds"; printf ','
+        csv_field "$commands"; printf ','
+        csv_field "$keystrokes"; printf ','
+        csv_field "$first_command"; printf '\n'
+    } >> "$csv"
+}
+
 archive_session() {
     local reason="$1"
     local label stamp dest d
@@ -172,6 +247,7 @@ archive_session() {
             cp -a "$live/$d"/. "$dest/$d/"
         fi
     done
+    append_session_csv "$dest"
     echo "saved $dest ($label)"
 }
 
@@ -254,6 +330,7 @@ watch_session() {
     SESSION_REASON=
     SESSION_START=0
     SESSION_CONNECTED_AT=
+    SESSION_STARTED_AT=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
@@ -272,6 +349,7 @@ watch_session() {
                         if [ -z "$SESSION_CONNECTED_AT" ]
                         then
                             SESSION_CONNECTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
+                            SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
                             SESSION_START=$(date +%s)
                         fi
                         ;;
@@ -295,6 +373,7 @@ watch_session() {
                     fi
                     # closed before any lock or shell: nothing is dirty, keep listening
                     SESSION_CONNECTED_AT=
+                    SESSION_STARTED_AT=
                     SESSION_START=0
                     SESSION_COMMANDS=0
                     SESSION_KEYSTROKES=0
@@ -311,6 +390,7 @@ watch_session() {
                         if [ -z "$SESSION_CONNECTED_AT" ]
                         then
                             SESSION_CONNECTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
+                            SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
                             SESSION_START=$now
                         fi
                         echo "session started" >&2
@@ -354,6 +434,8 @@ write_session_stats() {
     cat > "$live/session.stats" << EOF
 honeypot=$name
 public_ip=$PUBLIC_IP
+started_at=$SESSION_STARTED_AT
+ended_at=$SESSION_ENDED_AT
 config=$(config_now)
 ascii=$(config_text)
 reason=$why
@@ -425,6 +507,7 @@ run_one() {
         echo "waiting for attacker on $name"
         watch_session
         reason=$SESSION_REASON
+        SESSION_ENDED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
         left_at=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
         echo "session ended: $reason"
         length=0

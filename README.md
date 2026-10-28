@@ -46,6 +46,8 @@ Command-output poisoning has a statistically significant effect on attacker beha
 - [`recycling_script.sh`](./recycling_script.sh) restores a clean snapshot,
   applies a configuration, checks SSH readiness, and starts the MITM service.
 - [`lifecycle.sh`](./lifecycle.sh) runs the session loop, monitors MITM output,
-  and archives session records.
+  archives session records, and appends each completed session as one row to
+  `~/data/<honeypot>.lifecycle.csv`. Repeat sessions from the same attacker IP
+  are recorded as separate rows.
 - [`monitor.sh`](./monitor.sh) records SSH authentication, disconnect, and
   container health events.
