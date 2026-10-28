@@ -79,8 +79,4 @@ Live per-container data is written under `~/data/live/<container>/`. Archived
 sessions are saved under `~/data/logs/`, including the MITM log, session
 statistics, leave reason, configuration, and any available login/session
 records. The lifecycle loop can also send session-start and session-end
-<<<<<<< HEAD
 notifications if `SLACK_WEBHOOK_URL` is configured.
-=======
-notifications if `SLACK_WEBHOOK_URL` is configured.
->>>>>>> 5afe3aa08c0a9f8bbef32c29a9d41a932ba886da
