@@ -1,12 +1,25 @@
 # HACS200 Fallacy Honeypot Project
 
-This project deploys and operates SSH honeypots to observe and study attacker
-behavior in a controlled environment. Each honeypot runs in an Ubuntu LXD
-container and is presented as a fictional bank environment. SSH activity is
-handled by a separate MITM service, while the lifecycle scripts track sessions
-and preserve their logs for later analysis.
+This project investigates attacker behavior in response to command-output poisoning within a controlled honeypot environment. Each honeypot operates inside an Ubuntu LXD container configured to simulate a fictional banking system. When an attacker executes a command, the resulting output is modified using one of five predefined ASCII-based poisoning configurations. SSH interactions are managed through the ACES man-in-the-middle (MITM) service, while automated lifecycle scripts monitor and track individual sessions, preserving detailed activity logs for subsequent analysis.
 
-## What it does
+## Null Hypothesis (H₀)
+Command-output poisoning has no statistically significant effect on attacker behavior within the honeypot environment.
+
+## Alternative Hypothesis (Hₐ)
+Command-output poisoning has a statistically significant effect on attacker behavior within the honeypot environment.
+
+## Data Collection
+- A Slack bot is used to provide automated notifications and updates on completed honeypot sessions.
+- Real-time data for each honeypot container is stored in ~/data/live/<container>/.
+- Completed sessions are archived in ~/data/logs/ for future analysis.
+Archived records include:
+- SSH man-in-the-middle (MITM) logs
+- Session statistics
+- Attacker disconnect or leave reasons
+- Command-output poisoning configuration
+- Available login and session activity records
+
+## How it works
 
 - Runs four honeypot containers (`hp1`–`hp4`), with public addresses and MITM
   ports listed in [`honeypots.csv`](./honeypots.csv).
@@ -36,48 +49,3 @@ and preserve their logs for later analysis.
   and archives session records.
 - [`monitor.sh`](./monitor.sh) records SSH authentication, disconnect, and
   container health events.
-
-## Requirements
-
-- Linux host with LXD (`lxc`) configured and permission to manage containers.
-- `screen`, `sudo`, and the usual shell utilities used by the scripts.
-- The MITM Node.js service and its per-container configurations, expected by
-  default under `/root/honeypots/MITM/`.
-- The host NAT helper, expected by default at
-  `/root/honeypots/network/nat_mitm`.
-- Network and firewall rules appropriate for an authorized, isolated research
-  deployment.
-
-The MITM service and NAT helper are external dependencies; they are not included
-in this repository. `recycling_script.sh` supports overriding the MITM paths
-with `MITM_INDEX`, `MITM_CONFIG_DIR`, and `MITM_CONFIG`.
-
-## Setup and operation
-
-From the project directory, create each container once:
-
-```bash
-./create_honeypot.sh hp1
-./create_honeypot.sh hp2
-./create_honeypot.sh hp3
-./create_honeypot.sh hp4
-```
-
-Then start lifecycle loops for all honeypots:
-
-```bash
-./lifecycle.sh --all
-```
-
-Each loop requires the matching MITM config (for example, `hp1.js`) and the
-external host networking/NAT setup to be ready. To run one honeypot instead,
-use `./lifecycle.sh hp1`.
-
-## Collected data
-
-Live per-container data is written under `~/data/live/<container>/`. Archived
-sessions are saved under `~/data/logs/`, including the MITM log, session
-statistics, leave reason, configuration, and any available login/session
-records. The lifecycle loop can also send one Slack notification per completed
-attacker session with connection and departure timestamps, duration, and session
-details if `SLACK_WEBHOOK_URL` is configured.
