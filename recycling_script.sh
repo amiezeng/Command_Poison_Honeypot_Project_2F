@@ -19,7 +19,7 @@ SNAPSHOT="clean"
 # one config file per container, with that container's listening port in it.
 MITM_INDEX="${MITM_INDEX:-/root/honeypots/MITM/mitm/index.js}"
 MITM_CONFIG_DIR="${MITM_CONFIG_DIR:-/root/honeypots/MITM/config}"
-MITM_CONFIG="${MITM_CONFIG:-$MITM_CONFIG_DIR/$CONTAINER.json}"
+MITM_CONFIG="${MITM_CONFIG:-$MITM_CONFIG_DIR/$CONTAINER.js}"
 MITM_LOG="$HOME/data/live/$CONTAINER/mitm.log"
  
 # fail before touching the container if the MITM cannot be started
