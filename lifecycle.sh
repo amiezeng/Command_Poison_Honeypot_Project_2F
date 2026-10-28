@@ -26,6 +26,17 @@ as_root() {
     fi
 }
 
+# STY is set inside a screen session. a screen command then quits this loop
+# instead of the mitm session, so every screen command drops STY first.
+screen_do() {
+    if [ "$(id -u)" -eq 0 ]
+    then
+        env -u STY screen "$@"
+    else
+        sudo env -u STY screen "$@"
+    fi
+}
+
 # logout ends the attack. activity means a shell is open or the attacker typed.
 classify_mitm_line() {
     case "$1" in
@@ -53,7 +64,7 @@ lookup() {
 }
 
 container_ip() {
-    lxc list "$1" -c 4 --format csv | awk 'NR == 1 { print $1 }'
+    lxc list "$1" -c 4 --format csv 2>/dev/null | awk 'NR == 1 { print $1 }' || true
 }
 
 session_saved() {
@@ -143,8 +154,8 @@ replace_js_string() {
 
 start_mitm() {
     : > "$live/mitm.log"
-    as_root screen -S "${name}-mitm" -X quit 2>/dev/null || true
-    as_root screen -dmS "${name}-mitm" bash -c "cd '$MITM_CONFIG_DIR' && node '$MITM_INDEX' '${name}.js' 2>&1 | tee -a '$live/mitm.log'"
+    screen_do -S "${name}-mitm" -X quit 2>/dev/null || true
+    screen_do -dmS "${name}-mitm" bash -c "cd '$MITM_CONFIG_DIR' && node '$MITM_INDEX' '${name}.js' 2>&1 | tee -a '$live/mitm.log'"
 }
 
 mitm_listening() {
@@ -283,7 +294,7 @@ run_one() {
                 reason=error
                 ;;
         esac
-        as_root screen -S "${name}-mitm" -X quit 2>/dev/null || true
+        screen_do -S "${name}-mitm" -X quit 2>/dev/null || true
         sleep 1
     done
 }
@@ -295,15 +306,15 @@ start_all() {
     do
         [ -z "$name" ] && continue
         [ "$name" = "name" ] && continue
-        screen -S "$name" -X quit 2>/dev/null || true
-        as_root screen -S "$name" -X quit 2>/dev/null || true
-        as_root screen -S "${name}-mitm" -X quit 2>/dev/null || true
+        env -u STY screen -S "$name" -X quit 2>/dev/null || true
+        screen_do -S "$name" -X quit 2>/dev/null || true
+        screen_do -S "${name}-mitm" -X quit 2>/dev/null || true
     done < ./honeypots.csv
     while IFS=, read -r name _ _
     do
         [ -z "$name" ] && continue
         [ "$name" = "name" ] && continue
-        as_root screen -dmS "$name" bash -c "cd '$root' && exec ./lifecycle.sh '$name'"
+        screen_do -dmS "$name" bash -c "cd '$root' && exec ./lifecycle.sh '$name'"
         echo "started $name"
     done < ./honeypots.csv
 }
@@ -319,7 +330,14 @@ main() {
         echo "usage: $0 <container name> | $0 --all" >&2
         exit 1
     fi
-    run_one "$1"
+    # a failed command must not end the screen. start the honeypot again.
+    while true
+    do
+        (
+            run_one "$1"
+        ) || echo "lifecycle $1 stopped, starting again"
+        sleep 5
+    done
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]

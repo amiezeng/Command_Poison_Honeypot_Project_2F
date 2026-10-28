@@ -24,7 +24,7 @@ echo "selected configuration: $CONFIG"
 
 started=$(date +%s)
 
-sudo screen -S "$PROCESS" -X quit 2>/dev/null || true
+sudo env -u STY screen -S "$PROCESS" -X quit 2>/dev/null || true
 
 # lxc info prints "Running", not "RUNNING".
 # restore fails if that check does not match.
