@@ -19,17 +19,17 @@ SNAPSHOT="clean"
 # one config file per container, with that container's listening port in it.
 MITM_INDEX="${MITM_INDEX:-/root/honeypots/MITM/mitm/index.js}"
 MITM_CONFIG_DIR="${MITM_CONFIG_DIR:-/root/honeypots/MITM/config}"
-MITM_CONFIG="${MITM_CONFIG:-$MITM_CONFIG_DIR/$CONTAINER.json}"
+MITM_CONFIG="${MITM_CONFIG:-$MITM_CONFIG_DIR/$CONTAINER.js}"
 MITM_LOG="$HOME/data/live/$CONTAINER/mitm.log"
  
 # fail before touching the container if the MITM cannot be started
-if [ ! -f "$MITM_INDEX" ]
+if ! sudo test -f "$MITM_INDEX"
 then
     echo "MITM program not found: $MITM_INDEX"
     exit 1
 fi
  
-if [ ! -f "$MITM_CONFIG" ]
+if ! sudo test -f "$MITM_CONFIG"
 then
     echo "MITM config not found: $MITM_CONFIG"
     echo "set MITM_CONFIG=/path/to/config or edit MITM_CONFIG_DIR in this script"
@@ -126,7 +126,7 @@ case "$CONFIG" in
 esac
 lxc file push --mode 0644 "$banner" "$CONTAINER/etc/banner-art"
 rm -f "$banner"
- 
+
 cat ./configuration_setup.sh | lxc exec "$CONTAINER" -- bash -s "$CONFIG"
  
 # configuration setup must finish with ssh listening
@@ -156,7 +156,7 @@ printf '%s\n' "$CONFIG" > "$HOME/data/live/$CONTAINER/config"
 # sudo, because the kill at the top uses sudo and screen sessions belong to one user.
 # the config path and log path are passed as arguments so quoting cannot break.
 sudo screen -dmS "$PROCESS" bash -c \
-    'node "$1" "$2" 2>&1 | tee -a "$3"' _ "$MITM_INDEX" "$MITM_CONFIG" "$MITM_LOG"
+    'node "$1" "$2" 2>&1 | tee -a "$3"' _ "$MITM_INDEX" "$(basename "$MITM_CONFIG")" "$MITM_LOG"
  
 # confirm the screen session came up
 mitm_up=0

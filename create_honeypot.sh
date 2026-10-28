@@ -24,6 +24,7 @@ lxc launch ubuntu:24.04 "$CONTAINER" -p "$PROFILE"
 lxc exec "$CONTAINER" -- cloud-init status --wait
 
 cat ./common_setup.sh | lxc exec "$CONTAINER" -- bash -s
+cat ./honey_setup.sh | lxc exec "$CONTAINER" -- bash -s
 
 # a stopped snapshot restores to a clean stopped container
 lxc stop "$CONTAINER"
