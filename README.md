@@ -78,5 +78,6 @@ use `./lifecycle.sh hp1`.
 Live per-container data is written under `~/data/live/<container>/`. Archived
 sessions are saved under `~/data/logs/`, including the MITM log, session
 statistics, leave reason, configuration, and any available login/session
-records. The lifecycle loop can also send session-start and session-end
-notifications if `SLACK_WEBHOOK_URL` is configured.
+records. The lifecycle loop can also send one Slack notification per completed
+attacker session with connection and departure timestamps, duration, and session
+details if `SLACK_WEBHOOK_URL` is configured.
