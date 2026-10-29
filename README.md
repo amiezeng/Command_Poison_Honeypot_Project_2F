@@ -1,4 +1,4 @@
-# HACS200 Fallacy Honeypot Project
+# falLACY Honeypot Project
 
 This project investigates attacker behavior in response to command-output poisoning within a controlled honeypot environment. Each honeypot operates inside an Ubuntu LXD container configured to simulate a fictional banking system. When an attacker executes a command, the resulting output is modified using one of five predefined ASCII-based poisoning configurations. SSH interactions are managed through the ACES man-in-the-middle (MITM) service, while automated lifecycle scripts monitor and track individual sessions, preserving detailed activity logs for subsequent analysis.
 
