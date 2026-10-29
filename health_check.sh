@@ -5,7 +5,7 @@
 set -euo pipefail
 export HOME=/home/aces
 export TZ=America/New_York
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 
 if [ "$(id -u)" -ne 0 ]
 then
@@ -74,11 +74,16 @@ do
     [ "$name" = "name" ] && continue
     problems=()
 
-    info=$(lxc info "$name" 2>/dev/null || true)
-    running=$(printf '%s\n' "$info" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
-    if [ "$running" != "running" ]
+    if ! command -v lxc >/dev/null 2>&1
     then
-        problems+=("container is ${running:-missing}")
+        problems+=("lxc command not found")
+    else
+        info=$(lxc info "$name" 2>/dev/null || true)
+        running=$(printf '%s\n' "$info" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+        if [ "$running" != "running" ]
+        then
+            problems+=("container is ${running:-missing}")
+        fi
     fi
 
     if ! ss -H -ltn | awk -v p=":${port}$" '$4 ~ p { found = 1 } END { exit !found }'
@@ -91,8 +96,20 @@ do
         problems+=("lifecycle screen is not running")
     fi
 
-    log="$HOME/data/logs/${name}.lifecycle.log"
-    if [ ! -f "$log" ]
+    log=""
+    for candidate in \
+        "$HOME/data/logs/${name}.lifecycle.log" \
+        "$HOME/data/${name}.lifecycle.log" \
+        "$HOME/data/${name}.lifecycle.csv" \
+        "$HOME/data/logs/${name}.lifecycle.csv"
+    do
+        if [ -f "$candidate" ]
+        then
+            log=$candidate
+            break
+        fi
+    done
+    if [ -z "$log" ]
     then
         problems+=("lifecycle log is missing")
     else

@@ -329,13 +329,32 @@ watch_session() {
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
-    SESSION_CONNECTED_AT=
-    SESSION_STARTED_AT=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
     ATTACKER_IP=unknown
     : >> "$logfile"
+    # 0 when the session must end. idle is 60s of silence. the hard cap is 300s.
+    over_limit() {
+        if [ "$in_session" -ne 1 ]
+        then
+            return 1
+        fi
+        now=$(date +%s)
+        if [ $((now - start_ts)) -ge "$MAX_SESSION" ]
+        then
+            SESSION_REASON=timeout
+            kick_attacker
+            return 0
+        fi
+        if [ $((now - last_ts)) -ge "$IDLE_LIMIT" ]
+        then
+            SESSION_REASON=idle
+            kick_attacker
+            return 0
+        fi
+        return 1
+    }
     while true
     do
         total=$(wc -l < "$logfile" | tr -d '[:space:]')
@@ -344,16 +363,7 @@ watch_session() {
             while IFS= read -r line
             do
                 case "$line" in
-                    *"Attacker connected:"*)
-                        note_attacker_ip "$line"
-                        if [ -z "$SESSION_CONNECTED_AT" ]
-                        then
-                            SESSION_CONNECTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
-                            SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
-                            SESSION_START=$(date +%s)
-                        fi
-                        ;;
-                    *"Container locked to "*|*"trying to authenticate"*|*"[Auth] Attacker:"*|*"Auto Access] Attacker:"*)
+                    *"Attacker connected:"*|*"Container locked to "*|*"trying to authenticate"*|*"[Auth] Attacker:"*|*"Auto Access] Attacker:"*)
                         note_attacker_ip "$line"
                         ;;
                     *"line from reader:"*|*"Noninteractive mode attacker command:"*)
@@ -366,19 +376,13 @@ watch_session() {
                 event=$(classify_mitm_line "$line")
                 if [ "$event" = "logout" ]
                 then
-                    if [ "$in_session" -eq 1 ]
+                    # a late disconnect line must not hide a session that already hit the cap
+                    if over_limit
                     then
-                        SESSION_REASON=logout
                         return 0
                     fi
-                    # closed before any lock or shell: nothing is dirty, keep listening
-                    SESSION_CONNECTED_AT=
-                    SESSION_STARTED_AT=
-                    SESSION_START=0
-                    SESSION_COMMANDS=0
-                    SESSION_KEYSTROKES=0
-                    SESSION_FIRST_COMMAND=-1
-                    ATTACKER_IP=unknown
+                    SESSION_REASON=logout
+                    return 0
                 fi
                 if [ "$event" = "activity" ]
                 then
@@ -387,12 +391,7 @@ watch_session() {
                     then
                         in_session=1
                         start_ts=$now
-                        if [ -z "$SESSION_CONNECTED_AT" ]
-                        then
-                            SESSION_CONNECTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
-                            SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
-                            SESSION_START=$now
-                        fi
+                        SESSION_START=$now
                         echo "session started" >&2
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
@@ -401,22 +400,16 @@ watch_session() {
                     fi
                     last_ts=$now
                 fi
+                if over_limit
+                then
+                    return 0
+                fi
             done < <(awk -v start=$((seen + 1)) -v end="$total" 'NR >= start && NR <= end' "$logfile")
             seen=$total
         fi
-        if [ "$in_session" -eq 1 ]
+        if over_limit
         then
-            now=$(date +%s)
-            if [ $((now - start_ts)) -ge "$MAX_SESSION" ]
-            then
-                SESSION_REASON=timeout
-                return 0
-            fi
-            if [ $((now - last_ts)) -ge "$IDLE_LIMIT" ]
-            then
-                SESSION_REASON=idle
-                return 0
-            fi
+            return 0
         fi
         sleep 2
     done

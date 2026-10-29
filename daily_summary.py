@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# one slack summary for the last 24 hours. called by daily_summary.sh.
+# slack summary for the past 24 hours and every saved session.
+# called by daily_summary.sh.
 
 import os
 import re
@@ -93,6 +94,81 @@ def attacker_ip(text):
     return found
 
 
+def lifecycle_log(name):
+    for candidate in (
+        DATA / "logs" / f"{name}.lifecycle.log",
+        DATA / f"{name}.lifecycle.log",
+        DATA / f"{name}.lifecycle.csv",
+        DATA / "logs" / f"{name}.lifecycle.csv",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def config_rows(reached):
+    rows = [(LABELS[key], str(reached.get(key, 0))) for key in ("1", "2", "3", "4", "5")]
+    for key in sorted(reached):
+        if key not in LABELS:
+            rows.append((key, str(reached[key])))
+    return rows
+
+
+def render_section(attacks, names, public):
+    by_ip = Counter(item["ip"] for item in attacks)
+    by_hp = Counter(item["hp"] for item in attacks)
+    by_reason = Counter(item["reason"] for item in attacks)
+    reached = Counter(item["config"] for item in attacks)
+    commands = sum(as_int(item["commands"]) for item in attacks)
+    keystrokes = sum(as_int(item["keystrokes"]) for item in attacks)
+    lengths = [as_int(item["seconds"]) for item in attacks if item["seconds"] != ""]
+    average = int(round(sum(lengths) / len(lengths))) if lengths else 0
+    unique = len([ip for ip in by_ip if ip != "unknown"])
+    open_now = [item for item in attacks if item["open"]]
+
+    ip_rows = [(ip, str(count)) for ip, count in by_ip.most_common()]
+    if not ip_rows:
+        ip_rows = [("none", "0")]
+    reason_rows = [(reason, str(count)) for reason, count in by_reason.most_common()]
+    if not reason_rows:
+        reason_rows = [("none", "0")]
+    hp_rows = [(name, public.get(name, ""), str(by_hp.get(name, 0))) for name in names]
+
+    lines = [
+        "```",
+        f"number of attackers total: {len(attacks)}",
+        f"unique attacker ips: {unique}",
+        "",
+        "attackers by ip",
+        table(("ip address", "attackers"), ip_rows),
+        "",
+        "configurations attackers reached",
+        table(("configuration", "attackers"), config_rows(reached)),
+        "",
+        "attackers by honeypot",
+        table(("honeypot", "public ip", "attackers"), hp_rows),
+        "",
+        "how sessions ended",
+        table(("reason", "times"), reason_rows),
+        "",
+        f"commands: {commands}",
+        f"keystrokes: {keystrokes}",
+        f"average session: {average}s",
+        f"still open: {len(open_now)}",
+    ]
+    for item in open_now:
+        lines.append(f"{item['hp']} ({public.get(item['hp'], '')}) from {item['ip']}")
+    lines.append("```")
+    return lines
+
+
 def main():
     end = datetime.now()
     start = end - timedelta(hours=24)
@@ -110,8 +186,6 @@ def main():
                 when, hp = folder_time(folder.name)
             except ValueError:
                 continue
-            if when < start or when >= end:
-                continue
             stats = parse_stats(folder / "session.stats")
             if not stats and not (folder / "mitm.log").is_file():
                 continue
@@ -119,6 +193,7 @@ def main():
             if ip == "unknown" and (folder / "mitm.log").is_file():
                 ip = attacker_ip((folder / "mitm.log").read_text(errors="replace"))
             attacks.append({
+                "when": when,
                 "hp": stats.get("honeypot", hp),
                 "ip": ip,
                 "config": stats.get("config", "unknown"),
@@ -129,10 +204,9 @@ def main():
                 "open": False,
             })
 
-    open_now = []
-    for name, ip_pub, _port in honeypots:
-        log_path = logs / f"{name}.lifecycle.log"
-        if not log_path.is_file():
+    for name, _ip_pub, _port in honeypots:
+        log_path = lifecycle_log(name)
+        if log_path is None:
             continue
         last = None
         started = None
@@ -144,8 +218,6 @@ def main():
                 started = log_time(raw)
         if last != "open":
             continue
-        if started is not None and (started < start or started >= end):
-            continue
         live = DATA / "live" / name
         ip = "unknown"
         mitm = live / "mitm.log"
@@ -156,7 +228,8 @@ def main():
             digits = re.sub(r"\D", "", (live / "config").read_text(errors="replace"))
             if digits:
                 config = digits
-        item = {
+        attacks.append({
+            "when": started or end,
             "hp": name,
             "ip": ip,
             "config": config,
@@ -165,85 +238,26 @@ def main():
             "commands": "0",
             "keystrokes": "0",
             "open": True,
-        }
-        attacks.append(item)
-        open_now.append(f"{name} ({ip_pub}) from {ip}")
+        })
 
-    by_ip = Counter(item["ip"] for item in attacks)
-    by_hp = Counter(item["hp"] for item in attacks)
-    by_reason = Counter(item["reason"] for item in attacks)
-    reached = Counter(item["config"] for item in attacks)
-
-    deployed = Counter()
-    for name in names:
-        log_path = logs / f"{name}.lifecycle.log"
-        if not log_path.is_file():
-            continue
-        for raw in log_path.read_text(errors="replace").splitlines():
-            match = re.search(r"selected configuration:\s*(\d+)", raw)
-            if not match:
-                continue
-            when = log_time(raw)
-            if when is None or when < start or when >= end:
-                continue
-            deployed[match.group(1)] += 1
-
-    def num(value):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
-
-    commands = sum(num(item["commands"]) for item in attacks)
-    keystrokes = sum(num(item["keystrokes"]) for item in attacks)
-    lengths = [num(item["seconds"]) for item in attacks if item["seconds"] != ""]
-    average = int(round(sum(lengths) / len(lengths))) if lengths else 0
-
-    ip_rows = [(ip, str(count)) for ip, count in by_ip.most_common()]
-    if not ip_rows:
-        ip_rows = [("none", "0")]
-
-    deploy_rows = [(LABELS[key], str(deployed.get(key, 0))) for key in ("1", "2", "3", "4", "5")]
-    reached_rows = [(LABELS.get(key, key), str(count)) for key, count in sorted(reached.items(), key=lambda pair: pair[0])]
-    if not reached_rows:
-        reached_rows = [("none", "0")]
-
-    hp_rows = [(name, public.get(name, ""), str(by_hp.get(name, 0))) for name in names]
-    reason_rows = [(reason, str(count)) for reason, count in by_reason.most_common()]
-    if not reason_rows:
-        reason_rows = [("none", "0")]
+    recent = [item for item in attacks if start <= item["when"] < end]
+    oldest = min((item["when"] for item in attacks), default=None)
+    if oldest is None:
+        all_label = "no saved sessions on disk"
+    else:
+        all_label = f"oldest saved session {clock(oldest)} et"
 
     lines = [
-        "*honeypot daily summary*",
+        "*honeypot summary*",
+        "",
+        "*past 24 hours*",
         f"{clock(start)} through {clock(end)} et",
+        *render_section(recent, names, public),
         "",
-        "```",
-        f"number of attackers total: {len(attacks)}",
-        f"unique attacker ips: {len(by_ip)}",
-        "",
-        "attackers by ip",
-        table(("ip address", "attackers"), ip_rows),
-        "",
-        "configurations deployed",
-        table(("configuration", "times"), deploy_rows),
-        "",
-        "configurations attackers reached",
-        table(("configuration", "attackers"), reached_rows),
-        "",
-        "attackers by honeypot",
-        table(("honeypot", "public ip", "attackers"), hp_rows),
-        "",
-        "how sessions ended",
-        table(("reason", "times"), reason_rows),
-        "",
-        f"commands: {commands}",
-        f"keystrokes: {keystrokes}",
-        f"average session: {average}s",
-        f"still open: {len(open_now)}",
+        "*all saved sessions*",
+        all_label,
+        *render_section(attacks, names, public),
     ]
-    if open_now:
-        lines.extend(open_now)
-    lines.append("```")
     print("\n".join(lines))
 
 
