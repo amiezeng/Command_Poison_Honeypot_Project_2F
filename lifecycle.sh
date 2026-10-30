@@ -155,67 +155,79 @@ stats_value() {
 append_session_csv() {
     local dest="$1"
     local stats_file="$dest/session.stats"
-    local csv="$DATA/${name}.lifecycle.csv"
-    local session_id started_at ended_at honeypot public_ip config ascii reason
-    local attacker_ip session_seconds commands keystrokes first_command
+    local session_id honeypot config reason attacker_ip session_seconds commands keystrokes
+    local sessions_csv stamp timestamp
 
     [ -f "$stats_file" ] || return 0
     session_id=${dest##*/}
-    started_at=$(stats_value started_at "$stats_file")
-    ended_at=$(stats_value ended_at "$stats_file")
-    # Older archived stats do not include timestamps and cannot form a full row.
-    [ -n "$started_at" ] && [ -n "$ended_at" ] || return 0
-
-    if [ -s "$csv" ] && awk -F, -v id="$session_id" '
-        NR > 1 && ($1 == id || $1 == "\"" id "\"") { found = 1 }
-        END { exit !found }
-    ' "$csv"
+    honeypot=$(stats_value honeypot "$stats_file")
+    config=$(stats_value config "$stats_file")
+    reason=$(stats_value reason "$stats_file")
+    attacker_ip=$(stats_value attacker_ip "$stats_file")
+    session_seconds=$(stats_value session_seconds "$stats_file")
+    # a kick at 300s is measured a few seconds later, so keep that row
+    local limit=$MAX_SESSION
+    if [ "$reason" = "session timeout" ]
+    then
+        limit=$((MAX_SESSION + 30))
+    fi
+    if [[ ! "$session_seconds" =~ ^[0-9]+$ ]] ||
+        (( 10#$session_seconds > 10#$limit ))
     then
         return 0
     fi
 
-    if [ ! -s "$csv" ]
-    then
-        printf '%s\n' 'session_id,honeypot,started_at,ended_at,session_status,public_ip,config,ascii,reason,attacker_ip,session_seconds,commands,keystrokes,seconds_to_first_command' > "$csv"
-    fi
-
-    honeypot=$(stats_value honeypot "$stats_file")
-    public_ip=$(stats_value public_ip "$stats_file")
-    config=$(stats_value config "$stats_file")
-    ascii=$(stats_value ascii "$stats_file")
-    reason=$(stats_value reason "$stats_file")
-    attacker_ip=$(stats_value attacker_ip "$stats_file")
-    session_seconds=$(stats_value session_seconds "$stats_file")
     commands=$(stats_value commands "$stats_file")
     keystrokes=$(stats_value keystrokes "$stats_file")
-    first_command=$(stats_value seconds_to_first_command "$stats_file")
-    first_command=${first_command%s}
-    [ "$first_command" != none ] || first_command=
 
+    sessions_csv="$DATA/sessions1.csv"
+    stamp=${session_id%-*}
+    timestamp="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2}"
     {
-        csv_field "$session_id"; printf ','
-        csv_field "$honeypot"; printf ','
-        csv_field "$started_at"; printf ','
-        csv_field "$ended_at"; printf ','
-        csv_field completed; printf ','
-        csv_field "$public_ip"; printf ','
-        csv_field "$config"; printf ','
-        csv_field "$ascii"; printf ','
-        csv_field "$reason"; printf ','
-        csv_field "$attacker_ip"; printf ','
-        csv_field "$session_seconds"; printf ','
-        csv_field "$commands"; printf ','
-        csv_field "$keystrokes"; printf ','
-        csv_field "$first_command"; printf '\n'
-    } >> "$csv"
+        flock -x 9
+        if [ ! -s "$sessions_csv" ]
+        then
+            printf '%s\n' 'timestamp,honeypot,config,attacker_ip,session_seconds,reason,commands,keystrokes' >&9
+        fi
+        {
+            csv_field "$timestamp"; printf ','
+            csv_field "$honeypot"; printf ','
+            csv_field "$config"; printf ','
+            csv_field "$attacker_ip"; printf ','
+            csv_field "$session_seconds"; printf ','
+            csv_field "$reason"; printf ','
+            csv_field "$commands"; printf ','
+            csv_field "$keystrokes"; printf '\n'
+        } >&9
+    } 9>>"$sessions_csv"
 }
 
 archive_session() {
-    local reason="$1"
+    local reason="$1" session_seconds
     local label stamp dest d
     if ! session_saved
     then
         return 0
+    fi
+    if [ -f "$live/session.stats" ]
+    then
+        session_seconds=$(stats_value session_seconds "$live/session.stats")
+        local stats_reason limit=$MAX_SESSION
+        stats_reason=$(stats_value reason "$live/session.stats")
+        if [ "$stats_reason" = "session timeout" ]
+        then
+            limit=$((MAX_SESSION + 30))
+        fi
+        if [[ ! "$session_seconds" =~ ^[0-9]+$ ]]
+        then
+            echo "discarding session with invalid duration"
+            return 0
+        fi
+        if (( 10#$session_seconds > 10#$limit ))
+        then
+            echo "discarding session over ${limit}s limit"
+            return 0
+        fi
     fi
     case "$reason" in
         logout) label="attacker left" ;;
@@ -329,6 +341,7 @@ watch_session() {
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
+    SESSION_STARTED_AT=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
@@ -392,6 +405,7 @@ watch_session() {
                         in_session=1
                         start_ts=$now
                         SESSION_START=$now
+                        SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
                         echo "session started" >&2
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]

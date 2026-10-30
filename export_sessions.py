@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # one row per saved session, for the standup notebook.
-# writes /home/aces/data/sessions.csv
+# writes /home/aces/data/sessions1.csv
 
 import csv
 import os
@@ -11,7 +11,8 @@ from pathlib import Path
 
 DATA = Path(os.environ.get("HONEYPOT_DATA", "/home/aces/data"))
 LOGS = DATA / "logs"
-OUT = DATA / "sessions.csv"
+OUT = DATA / "sessions1.csv"
+MAX_SESSION = int(os.environ.get("MAX_SECONDS", "300"))
 FIELDS = [
     "timestamp",
     "honeypot",
@@ -48,6 +49,10 @@ def parse_stats(path):
     return info
 
 
+def row_key(row):
+    return tuple(row.get(field, "") or "" for field in FIELDS)
+
+
 def main():
     rows = []
     if not LOGS.is_dir():
@@ -63,6 +68,10 @@ def main():
         seconds = stats.get("session_seconds", "")
         if not seconds.isdigit():
             continue
+        if int(seconds) > MAX_SESSION and not (
+            stats.get("reason") == "session timeout" and int(seconds) <= MAX_SESSION + 30
+        ):
+            continue
         rows.append({
             "timestamp": when.strftime("%Y-%m-%d %H:%M:%S"),
             "honeypot": stats.get("honeypot", hp),
@@ -73,14 +82,32 @@ def main():
             "commands": stats.get("commands", ""),
             "keystrokes": stats.get("keystrokes", ""),
         })
-    with OUT.open("w", newline="") as handle:
+
+    existing = set()
+    if OUT.is_file() and OUT.stat().st_size:
+        with OUT.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != FIELDS:
+                raise SystemExit(f"{OUT} has an unexpected CSV header")
+            existing.update(row_key(row) for row in reader)
+
+    new_rows = []
+    for row in rows:
+        key = row_key(row)
+        if key not in existing:
+            new_rows.append(row)
+            existing.add(key)
+
+    needs_header = not OUT.is_file() or OUT.stat().st_size == 0
+    with OUT.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
+        if needs_header:
+            writer.writeheader()
+        writer.writerows(new_rows)
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         user = pwd.getpwnam("aces")
         os.chown(OUT, user.pw_uid, user.pw_gid)
-    print(f"wrote {len(rows)} sessions to {OUT}")
+    print(f"appended {len(new_rows)} sessions to {OUT}")
 
 
 if __name__ == "__main__":
