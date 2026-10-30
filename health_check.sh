@@ -18,6 +18,12 @@ cd "$(dirname "$0")"
 
 state="$HOME/data/health"
 mkdir -p "$state"
+# one check at a time. a hung lxc call must not stack a new copy every 5 minutes.
+exec 9>"$state/health_check.lock"
+if ! flock -n 9
+then
+    exit 0
+fi
 changes=()
 
 consider() {
@@ -78,7 +84,7 @@ do
     then
         problems+=("lxc command not found")
     else
-        info=$(lxc info "$name" 2>/dev/null || true)
+        info=$(timeout 20 lxc info "$name" 2>/dev/null || true)
         running=$(printf '%s\n' "$info" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
         if [ "$running" != "running" ]
         then
