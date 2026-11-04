@@ -341,7 +341,7 @@ watch_session() {
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
-    SESSION_STARTED_AT=
+    SESSION_START=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
@@ -405,7 +405,7 @@ watch_session() {
                         in_session=1
                         start_ts=$now
                         SESSION_START=$now
-                        SESSION_STARTED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
+                        SESSION_START=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
                         echo "session started" >&2
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
@@ -425,6 +425,15 @@ watch_session() {
         then
             return 0
         fi
+        if ! screen_do -ls 2>/dev/null | grep -q "[0-9][0-9]*\.${name}-mitm[[:space:]]"
+        then
+            echo "mitm screen is gone, recycling" >&2
+            if [ "$in_session" -eq 1 ]
+            then
+                SESSION_REASON=logout
+            fi
+            return 0
+        fi
         sleep 2
     done
 }
@@ -441,7 +450,7 @@ write_session_stats() {
     cat > "$live/session.stats" << EOF
 honeypot=$name
 public_ip=$PUBLIC_IP
-started_at=$SESSION_STARTED_AT
+started_at=$SESSION_START
 ended_at=$SESSION_ENDED_AT
 config=$(config_now)
 ascii=$(config_text)

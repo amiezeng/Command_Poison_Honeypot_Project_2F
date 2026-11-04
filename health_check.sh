@@ -85,10 +85,15 @@ do
         problems+=("lxc command not found")
     else
         info=$(timeout 20 lxc info "$name" 2>/dev/null || true)
-        running=$(printf '%s\n' "$info" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
-        if [ "$running" != "running" ]
+        if [ -z "$info" ]
         then
-            problems+=("container is ${running:-missing}")
+            problems+=("lxc info timed out")
+        else
+            running=$(printf '%s\n' "$info" | sed -n 's/^Status: //p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+            if [ "$running" != "running" ]
+            then
+                problems+=("container is ${running:-missing}")
+            fi
         fi
     fi
 
