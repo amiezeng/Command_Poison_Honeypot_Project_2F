@@ -133,9 +133,6 @@ def render_section(attacks, names, public):
     unique = len([ip for ip in by_ip if ip != "unknown"])
     open_now = [item for item in attacks if item["open"]]
 
-    ip_rows = [(ip, str(count)) for ip, count in by_ip.most_common()]
-    if not ip_rows:
-        ip_rows = [("none", "0")]
     reason_rows = [(reason, str(count)) for reason, count in by_reason.most_common()]
     if not reason_rows:
         reason_rows = [("none", "0")]
@@ -145,9 +142,6 @@ def render_section(attacks, names, public):
         "```",
         f"number of attackers total: {len(attacks)}",
         f"unique attacker ips: {unique}",
-        "",
-        "attackers by ip",
-        table(("ip address", "attackers"), ip_rows),
         "",
         "configurations attackers reached",
         table(("configuration", "attackers"), config_rows(reached)),
