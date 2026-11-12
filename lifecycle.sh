@@ -135,17 +135,110 @@ session_saved() {
     return 1
 }
 
+csv_field() {
+    local value="${1//\"/\"\"}"
+    printf '"%s"' "$value"
+}
+
+stats_value() {
+    local key="$1"
+    local stats_file="$2"
+    awk -F= -v key="$key" '
+        $1 == key {
+            sub(/^[^=]*=/, "")
+            print
+            exit
+        }
+    ' "$stats_file"
+}
+
+append_session_csv() {
+    local dest="$1"
+    local stats_file="$dest/session.stats"
+    local session_id honeypot config reason attacker_ip session_seconds commands keystrokes
+    local sessions_csv stamp timestamp
+
+    [ -f "$stats_file" ] || return 0
+    session_id=${dest##*/}
+    honeypot=$(stats_value honeypot "$stats_file")
+    config=$(stats_value config "$stats_file")
+    reason=$(stats_value reason "$stats_file")
+    attacker_ip=$(stats_value attacker_ip "$stats_file")
+    session_seconds=$(stats_value session_seconds "$stats_file")
+    # a kick at 300s is measured a few seconds later, so keep that row
+    local limit=$MAX_SESSION
+    if [ "$reason" = "session timeout" ]
+    then
+        limit=$((MAX_SESSION + 30))
+    fi
+    if [[ ! "$session_seconds" =~ ^[0-9]+$ ]] ||
+        (( 10#$session_seconds > 10#$limit ))
+    then
+        return 0
+    fi
+
+    commands=$(stats_value commands "$stats_file")
+    keystrokes=$(stats_value keystrokes "$stats_file")
+
+    sessions_csv="$DATA/sessions1.csv"
+    stamp=${session_id%-*}
+    timestamp="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2}"
+    {
+        flock -x 9
+        if [ ! -s "$sessions_csv" ]
+        then
+            printf '%s\n' 'timestamp,honeypot,config,attacker_ip,session_seconds,reason,commands,keystrokes' >&9
+        fi
+        {
+            csv_field "$timestamp"; printf ','
+            csv_field "$honeypot"; printf ','
+            csv_field "$config"; printf ','
+            csv_field "$attacker_ip"; printf ','
+            csv_field "$session_seconds"; printf ','
+            csv_field "$reason"; printf ','
+            csv_field "$commands"; printf ','
+            csv_field "$keystrokes"; printf '\n'
+        } >&9
+    } 9>>"$sessions_csv"
+}
+
 archive_session() {
-    local reason="$1"
-    local stamp dest d
+    local reason="$1" session_seconds
+    local label stamp dest d
     if ! session_saved
     then
         return 0
     fi
-    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    if [ -f "$live/session.stats" ]
+    then
+        session_seconds=$(stats_value session_seconds "$live/session.stats")
+        local stats_reason limit=$MAX_SESSION
+        stats_reason=$(stats_value reason "$live/session.stats")
+        if [ "$stats_reason" = "session timeout" ]
+        then
+            limit=$((MAX_SESSION + 30))
+        fi
+        if [[ ! "$session_seconds" =~ ^[0-9]+$ ]]
+        then
+            echo "discarding session with invalid duration"
+            return 0
+        fi
+        if (( 10#$session_seconds > 10#$limit ))
+        then
+            echo "discarding session over ${limit}s limit"
+            return 0
+        fi
+    fi
+    case "$reason" in
+        logout) label="attacker left" ;;
+        idle) label="idle timeout" ;;
+        timeout) label="session timeout" ;;
+        *) label="$reason" ;;
+    esac
+    stamp=$(TZ=America/New_York date +%Y%m%dT%H%M%S)
     dest="$DATA/logs/${stamp}-${name}"
     mkdir -p "$dest"
-    printf '%s\n' "$reason" > "$dest/leave_reason"
+    printf '%s\n' "$label" > "$dest/leave_reason"
     if [ -f "$live/config" ]
     then
         cp "$live/config" "$dest/config"
@@ -166,7 +259,8 @@ archive_session() {
             cp -a "$live/$d"/. "$dest/$d/"
         fi
     done
-    echo "saved $dest ($reason)"
+    append_session_csv "$dest"
+    echo "saved $dest ($label)"
 }
 
 clear_session_files() {
@@ -212,8 +306,18 @@ replace_js_string() {
 }
 
 start_mitm() {
+    local _
     : > "$live/mitm.log"
     screen_do -S "${name}-mitm" -X quit 2>/dev/null || true
+    # wait for the old node process to release the port before starting a new one
+    for _ in $(seq 1 20)
+    do
+        if ! ss -ltn "sport = :$MITM_PORT" | grep -q LISTEN
+        then
+            break
+        fi
+        sleep 0.5
+    done
     screen_do -dmS "${name}-mitm" bash -c "cd '$MITM_CONFIG_DIR' && node '$MITM_INDEX' '${name}.js' 2>&1 | tee -a '$live/mitm.log'"
 }
 
@@ -230,18 +334,40 @@ mitm_listening() {
     return 1
 }
 
-# sets SESSION_REASON, SESSION_START, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
+# sets SESSION_REASON, SESSION_START, SESSION_CONNECTED_AT, SESSION_COMMANDS, SESSION_KEYSTROKES, SESSION_FIRST_COMMAND, ATTACKER_IP
 watch_session() {
     local logfile="$live/mitm.log"
     local seen=0 total now line event
     local in_session=0 start_ts=0 last_ts=0
     SESSION_REASON=
     SESSION_START=0
+    SESSION_START=
     SESSION_COMMANDS=0
     SESSION_KEYSTROKES=0
     SESSION_FIRST_COMMAND=-1
     ATTACKER_IP=unknown
     : >> "$logfile"
+    # 0 when the session must end. idle is 60s of silence. the hard cap is 300s.
+    over_limit() {
+        if [ "$in_session" -ne 1 ]
+        then
+            return 1
+        fi
+        now=$(date +%s)
+        if [ $((now - start_ts)) -ge "$MAX_SESSION" ]
+        then
+            SESSION_REASON=timeout
+            kick_attacker
+            return 0
+        fi
+        if [ $((now - last_ts)) -ge "$IDLE_LIMIT" ]
+        then
+            SESSION_REASON=idle
+            kick_attacker
+            return 0
+        fi
+        return 1
+    }
     while true
     do
         total=$(wc -l < "$logfile" | tr -d '[:space:]')
@@ -263,6 +389,11 @@ watch_session() {
                 event=$(classify_mitm_line "$line")
                 if [ "$event" = "logout" ]
                 then
+                    # a late disconnect line must not hide a session that already hit the cap
+                    if over_limit
+                    then
+                        return 0
+                    fi
                     SESSION_REASON=logout
                     return 0
                 fi
@@ -274,8 +405,8 @@ watch_session() {
                         in_session=1
                         start_ts=$now
                         SESSION_START=$now
+                        SESSION_START=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
                         echo "session started" >&2
-                        slack "$name $PUBLIC_IP, config $(config_text): attacker entered from $ATTACKER_IP"
                     fi
                     if [ "$SESSION_COMMANDS" -gt 0 ] && [ "$SESSION_FIRST_COMMAND" -lt 0 ]
                     then
@@ -283,22 +414,25 @@ watch_session() {
                     fi
                     last_ts=$now
                 fi
+                if over_limit
+                then
+                    return 0
+                fi
             done < <(awk -v start=$((seen + 1)) -v end="$total" 'NR >= start && NR <= end' "$logfile")
             seen=$total
         fi
-        if [ "$in_session" -eq 1 ]
+        if over_limit
         then
-            now=$(date +%s)
-            if [ $((now - start_ts)) -ge "$MAX_SESSION" ]
+            return 0
+        fi
+        if ! screen_do -ls 2>/dev/null | grep -q "[0-9][0-9]*\.${name}-mitm[[:space:]]"
+        then
+            echo "mitm screen is gone, recycling" >&2
+            if [ "$in_session" -eq 1 ]
             then
-                SESSION_REASON=timeout
-                return 0
+                SESSION_REASON=logout
             fi
-            if [ $((now - last_ts)) -ge "$IDLE_LIMIT" ]
-            then
-                SESSION_REASON=idle
-                return 0
-            fi
+            return 0
         fi
         sleep 2
     done
@@ -316,6 +450,8 @@ write_session_stats() {
     cat > "$live/session.stats" << EOF
 honeypot=$name
 public_ip=$PUBLIC_IP
+started_at=$SESSION_START
+ended_at=$SESSION_ENDED_AT
 config=$(config_now)
 ascii=$(config_text)
 reason=$why
@@ -333,7 +469,7 @@ kick_attacker() {
 
 run_one() {
     local name="$1"
-    local live reason ip
+    local live reason ip left_at
     lookup "$name"
     live="$DATA/live/$name"
     mkdir -p "$live"
@@ -387,6 +523,8 @@ run_one() {
         echo "waiting for attacker on $name"
         watch_session
         reason=$SESSION_REASON
+        SESSION_ENDED_AT=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S')
+        left_at=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
         echo "session ended: $reason"
         length=0
         if [ "$SESSION_START" -gt 0 ]
@@ -394,9 +532,9 @@ run_one() {
             length=$(( $(date +%s) - SESSION_START ))
         fi
         case "$reason" in
-            logout) why=exited ;;
-            idle) why=idle ;;
-            timeout) why="kicked at 5 minutes" ;;
+            logout) why="attacker left" ;;
+            idle) why="idle timeout" ;;
+            timeout) why="session timeout" ;;
             *) why=$reason ;;
         esac
         first=none
@@ -404,16 +542,10 @@ run_one() {
         then
             first="${SESSION_FIRST_COMMAND}s"
         fi
+        left=$(TZ=America/New_York date '+%Y-%m-%d %I:%M:%S %p %Z')
         case "$reason" in
             logout|idle|timeout)
                 write_session_stats "$length" "$why"
-                slack "$name $PUBLIC_IP, config $(config_text): attacker left
-reason: $why
-from: $ATTACKER_IP
-session: ${length}s
-commands: $SESSION_COMMANDS
-keystrokes: $SESSION_KEYSTROKES
-first command: $first"
                 ;;
         esac
         case "$reason" in
@@ -448,7 +580,7 @@ start_all() {
     do
         [ -z "$name" ] && continue
         [ "$name" = "name" ] && continue
-        screen_do -dmS "$name" bash -c "cd '$root' && exec ./lifecycle.sh '$name'"
+        screen_do -dmS "$name" bash -c "cd '$root' && exec ./run-one.sh '$name'"
         echo "started $name"
     done < ./honeypots.csv
 }

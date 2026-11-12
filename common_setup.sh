@@ -6,6 +6,7 @@ set -euo pipefail
 
 apt update -y
 apt install -y openssh-server
+hostnamectl set-hostname BankOfEvil
 
 # the image sets password auth to no in this file, and ssh reads it first
 printf '%s\n' 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/60-cloudimg-settings.conf

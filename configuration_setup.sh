@@ -11,6 +11,7 @@ then
 fi
 
 CONFIG="$1"
+HOSTNAME="BankOfEvil"
 
 case "$CONFIG" in
     1|2|3|4|5)
@@ -20,6 +21,8 @@ case "$CONFIG" in
         exit 1
         ;;
 esac
+
+hostnamectl set-hostname "$HOSTNAME"
 
 # recycling_script.sh already copied this cycle's art to /etc/banner-art
 echo "applied configuration $CONFIG"

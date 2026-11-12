@@ -30,7 +30,7 @@ log_event() {
     local event="$1"
     local extra="$2"
     local now
-    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    now=$(TZ=America/New_York date +%Y-%m-%dT%H:%M:%S)
     printf '%s container=%s config=%s event=%s %s\n' \
         "$now" "$CONTAINER" "$config" "$event" "$extra" >> "$live_dir/monitor.log"
 }

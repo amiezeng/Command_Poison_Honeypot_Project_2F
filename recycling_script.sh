@@ -127,13 +127,13 @@ esac
 lxc file push --mode 0644 "$banner" "$CONTAINER/etc/banner-art"
 rm -f "$banner"
 
-cat ./configuration_setup.sh | lxc exec "$CONTAINER" -- bash -s "$CONFIG"
+lxc exec "$CONTAINER" -- /bin/bash --noprofile --norc -s "$CONFIG" < ./configuration_setup.sh || echo "configuration setup skipped"
  
 # configuration setup must finish with ssh listening
 ssh_up=0
 for _ in $(seq 1 30)
 do
-    if lxc exec "$CONTAINER" -- bash -c 'echo >/dev/tcp/127.0.0.1/22' >/dev/null 2>&1
+    if lxc exec "$CONTAINER" -- python3 -c 'import socket; socket.create_connection(("127.0.0.1", 22), 2).close()' >/dev/null 2>&1
     then
         ssh_up=1
         break
